@@ -1,4 +1,5 @@
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE BangPatterns #-}
 #if __GLASGOW_HASKELL__ >= 708
 #define DEFINE_PATTERN_SYNONYMS 1
@@ -1666,60 +1667,68 @@ update i x      = adjust (const x) i
 adjust          :: (a -> a) -> Int -> Seq a -> Seq a
 adjust f i (Seq xs)
   -- See note on unsigned arithmetic in splitAt
-  | fromIntegral i < (fromIntegral (size xs) :: Word) = Seq (adjustTree (`seq` fmap f) i xs)
+  | fromIntegral i < (fromIntegral (size xs) :: Word) = Seq (adjustTree (SeqFMap f) i xs)
   | otherwise   = Seq xs
 
-{-# SPECIALIZE adjustTree :: (Int -> Elem a -> Elem a) -> Int -> FingerTree (Elem a) -> FingerTree (Elem a) #-}
-{-# SPECIALIZE adjustTree :: (Int -> Node a -> Node a) -> Int -> FingerTree (Node a) -> FingerTree (Node a) #-}
-adjustTree      :: Sized a => (Int -> a -> a) ->
+data AdjustFun a where
+  SeqFMap    :: (a -> a) -> AdjustFun (Elem a)
+  AdjustNode :: Sized a => AdjustFun a -> AdjustFun (Node a)
+
+runAdjustFun :: AdjustFun a -> Int -> a -> a
+runAdjustFun (SeqFMap f)    !_ x = fmap f x
+runAdjustFun (AdjustNode f) !i x = adjustNode f i x
+
+{-# SPECIALIZE adjustTree :: (AdjustFun (Elem a)) -> Int -> FingerTree (Elem a) -> FingerTree (Elem a) #-}
+{-# SPECIALIZE adjustTree :: (AdjustFun (Node a)) -> Int -> FingerTree (Node a) -> FingerTree (Node a) #-}
+adjustTree      :: Sized a => AdjustFun a ->
              Int -> FingerTree a -> FingerTree a
 adjustTree _ !_ EmptyT = EmptyT -- Unreachable
-adjustTree f i (Single x) = Single (f i x)
+adjustTree f i (Single x) = Single (runAdjustFun f i x)
 adjustTree f i (Deep s pr m sf)
   | i < spr     = Deep s (adjustDigit f i pr) m sf
-  | i < spm     = Deep s pr (adjustTree (adjustNode f) (i - spr) m) sf
+  | i < spm     = Deep s pr (adjustTree (AdjustNode f) (i - spr) m) sf
   | otherwise   = Deep s pr m (adjustDigit f (i - spm) sf)
   where
     spr     = size pr
     spm     = spr + size m
 
-{-# SPECIALIZE adjustNode :: (Int -> Elem a -> Elem a) -> Int -> Node (Elem a) -> Node (Elem a) #-}
-{-# SPECIALIZE adjustNode :: (Int -> Node a -> Node a) -> Int -> Node (Node a) -> Node (Node a) #-}
-adjustNode      :: Sized a => (Int -> a -> a) -> Int -> Node a -> Node a
+{-# SPECIALIZE adjustNode :: AdjustFun (Elem a) -> Int -> Node (Elem a) -> Node (Elem a) #-}
+{-# SPECIALIZE adjustNode :: AdjustFun (Node a) -> Int -> Node (Node a) -> Node (Node a) #-}
+adjustNode      :: Sized a => (AdjustFun a) -> Int -> Node a -> Node a
 adjustNode f i (Node2 s a b)
-  | i < sa      = Node2 s (f i a) b
-  | otherwise   = Node2 s a (f (i - sa) b)
+  | i < sa      = Node2 s (runAdjustFun f i a) b
+  | otherwise   = Node2 s a (runAdjustFun f (i - sa) b)
   where
     sa      = size a
 adjustNode f i (Node3 s a b c)
-  | i < sa      = Node3 s (f i a) b c
-  | i < sab     = Node3 s a (f (i - sa) b) c
-  | otherwise   = Node3 s a b (f (i - sab) c)
+  | i < sa      = Node3 s (runAdjustFun f i a) b c
+  | i < sab     = Node3 s a (runAdjustFun f (i - sa) b) c
+  | otherwise   = Node3 s a b (runAdjustFun f (i - sab) c)
   where
     sa      = size a
     sab     = sa + size b
 
-{-# SPECIALIZE adjustDigit :: (Int -> Elem a -> Elem a) -> Int -> Digit (Elem a) -> Digit (Elem a) #-}
-{-# SPECIALIZE adjustDigit :: (Int -> Node a -> Node a) -> Int -> Digit (Node a) -> Digit (Node a) #-}
-adjustDigit     :: Sized a => (Int -> a -> a) -> Int -> Digit a -> Digit a
-adjustDigit f !i (One a) = One (f i a)
+{-# SPECIALIZE adjustDigit :: AdjustFun (Elem a) -> Int -> Digit (Elem a) -> Digit (Elem a) #-}
+{-# SPECIALIZE adjustDigit :: AdjustFun (Node a) -> Int -> Digit (Node a) -> Digit (Node a) #-}
+adjustDigit     :: Sized a => (AdjustFun a) -> Int -> Digit a -> Digit a
+adjustDigit f !i (One a) = One (runAdjustFun f i a)
 adjustDigit f i (Two a b)
-  | i < sa      = Two (f i a) b
-  | otherwise   = Two a (f (i - sa) b)
+  | i < sa      = Two (runAdjustFun f i a) b
+  | otherwise   = Two a (runAdjustFun f (i - sa) b)
   where
     sa      = size a
 adjustDigit f i (Three a b c)
-  | i < sa      = Three (f i a) b c
-  | i < sab     = Three a (f (i - sa) b) c
-  | otherwise   = Three a b (f (i - sab) c)
+  | i < sa      = Three (runAdjustFun f i a) b c
+  | i < sab     = Three a (runAdjustFun f (i - sa) b) c
+  | otherwise   = Three a b (runAdjustFun f (i - sab) c)
   where
     sa      = size a
     sab     = sa + size b
 adjustDigit f i (Four a b c d)
-  | i < sa      = Four (f i a) b c d
-  | i < sab     = Four a (f (i - sa) b) c d
-  | i < sabc    = Four a b (f (i - sab) c) d
-  | otherwise   = Four a b c (f (i- sabc) d)
+  | i < sa      = Four (runAdjustFun f i a) b c d
+  | i < sab     = Four a (runAdjustFun f (i - sa) b) c d
+  | i < sabc    = Four a b (runAdjustFun f (i - sab) c) d
+  | otherwise   = Four a b c (runAdjustFun f (i- sabc) d)
   where
     sa      = size a
     sab     = sa + size b
