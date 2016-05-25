@@ -1670,13 +1670,23 @@ adjust f i (Seq xs)
   | fromIntegral i < (fromIntegral (size xs) :: Word) = Seq (adjustTree (SeqFMap f) i xs)
   | otherwise   = Seq xs
 
+{-# RULES
+"spec/AdjustNode/Elem" forall x . AdjustNode x = AdjustNodeElem x
+"spec/AdjustNode/Node" forall x . AdjustNode x = AdjustNodeNode x
+ #-}
+
 data AdjustFun a where
-  SeqFMap    :: (a -> a) -> AdjustFun (Elem a)
-  AdjustNode :: Sized a => AdjustFun a -> AdjustFun (Node a)
+  SeqFMap        :: (a -> a) -> AdjustFun (Elem a)
+  AdjustNodeElem :: AdjustFun (Elem a) -> AdjustFun (Node (Elem a))
+  AdjustNodeNode :: AdjustFun (Node a) -> AdjustFun (Node (Node a))
+  AdjustNode     :: Sized a => AdjustFun a -> AdjustFun (Node a)
+
 
 runAdjustFun :: AdjustFun a -> Int -> a -> a
-runAdjustFun (SeqFMap f)    !_ x = fmap f x
-runAdjustFun (AdjustNode f) !i x = adjustNode f i x
+runAdjustFun (SeqFMap f)        !_ x = fmap f x
+runAdjustFun (AdjustNode f)     !i x = adjustNode f i x
+runAdjustFun (AdjustNodeElem f) !i x = adjustNode f i x
+runAdjustFun (AdjustNodeNode f) !i x = adjustNode f i x
 
 {-# SPECIALIZE adjustTree :: (AdjustFun (Elem a)) -> Int -> FingerTree (Elem a) -> FingerTree (Elem a) #-}
 {-# SPECIALIZE adjustTree :: (AdjustFun (Node a)) -> Int -> FingerTree (Node a) -> FingerTree (Node a) #-}
